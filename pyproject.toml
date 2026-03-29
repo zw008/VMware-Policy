@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vmware-policy"
-version = "1.4.0"
+version = "1.4.1"
 description = "Unified audit logging, policy enforcement, and sanitization for VMware MCP skills"
 readme = "README.md"
 license = "MIT"
