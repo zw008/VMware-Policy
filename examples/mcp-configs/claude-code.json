@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "vmware-policy": {
+      "command": "uvx",
+      "args": ["--from", "vmware-policy", "vmware-audit"],
+      "env": {}
+    }
+  }
+}

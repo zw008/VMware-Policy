@@ -1,0 +1,36 @@
+# VMware Policy -- Example Rules Configuration
+# Copy to ~/.vmware/rules.yaml and customize per environment.
+#
+# Rule evaluation order:
+#   1. deny rules (if any match -> operation blocked)
+#   2. maintenance_window (high/critical ops restricted to window)
+#   3. change_limits (parameter-based thresholds)
+#   4. default -> allow
+#
+# Rules are hot-reloaded on file change -- no restart needed.
+
+# -- Deny rules ---------------------------------------------------------------
+# Block specific operations by name pattern, environment, or risk level.
+deny:
+  - name: no-delete-in-prod
+    operations: ["delete_*", "cluster_delete"]
+    environments: ["production"]
+    reason: "Destructive operations are not allowed in production without approval"
+
+  - name: no-critical-outside-window
+    min_risk_level: critical
+    environments: ["production"]
+    reason: "Critical operations require maintenance window"
+
+# -- Maintenance window --------------------------------------------------------
+# High and critical risk operations are only allowed during this time window.
+# Uses 24-hour format. Wraps midnight (e.g., 22:00-06:00 = overnight).
+maintenance_window:
+  start: "22:00"
+  end: "06:00"
+
+# -- Change limits -------------------------------------------------------------
+# Parameter-based thresholds for resource changes.
+# change_limits:
+#   max_cpu_change_pct: 20
+#   max_memory_change_pct: 50
