@@ -1,3 +1,24 @@
+## v1.9.0 — packaging metadata: the PyPI page now links back to the source
+
+`vmware-policy` is a transitive dependency of every skill in the family, so its
+PyPI page is where a security reviewer lands when they ask what the thing
+auditing their vCenter operations actually is. That page carried no Homepage,
+no Source, no Issues link — the only route back to the repository was whatever
+the README body happened to say.
+
+- `[project.urls]` now declares Homepage / Repository / Issues / Changelog
+  against `github.com/vmware-skills/VMware-Policy`.
+- `README-CN.md` carries the `mcp-name` marker that most of the family already
+  had. Functionally inert (the registry reads the README PyPI renders), but it
+  removes an inconsistency that reads as an oversight.
+- Ships as a Claude Code plugin (`.claude-plugin/plugin.json`). Policy has no
+  MCP server — it is the audit and policy library the other skills depend on —
+  so the manifest correctly declares no server.
+
+No behaviour change: no new API, no changed signature, nothing in
+`@vmware_tool`, `audit`, `policy`, `budget`, `undo` or `paths` moves. Skills
+pinning `vmware-policy>=1.8.5,<2.0` need no action.
+
 ## v1.8.9 — moved to vmware-skills org + MCP Registry namespace io.github.vmware-skills/vmware-policy
 
 Repo transferred from github.com/zw008 to github.com/vmware-skills (redirects preserve old links).
