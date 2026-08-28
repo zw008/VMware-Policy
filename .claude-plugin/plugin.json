@@ -1,0 +1,21 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "vmware-policy",
+  "displayName": "VMware Policy",
+  "version": "1.8.9",
+  "description": "Unified audit logging, policy enforcement, and input sanitization for the VMware MCP skill family.",
+  "author": {
+    "name": "Wei Zhou",
+    "email": "zhouwei008@gmail.com",
+    "url": "https://github.com/vmware-skills"
+  },
+  "homepage": "https://github.com/vmware-skills/VMware-Policy",
+  "repository": "https://github.com/vmware-skills/VMware-Policy",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "policy",
+    "vmware",
+    "vsphere"
+  ]
+}
