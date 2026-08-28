@@ -1,3 +1,4 @@
+<!-- mcp-name: io.github.vmware-skills/vmware-policy -->
 # VMware Policy
 
 > **作者**: Wei Zhou, VMware by Broadcom — wei-wz.zhou@broadcom.com

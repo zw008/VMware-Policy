@@ -29,6 +29,13 @@ dev = [
 [project.scripts]
 vmware-audit = "vmware_policy.cli:app"
 
+
+[project.urls]
+Homepage = "https://github.com/vmware-skills/VMware-Policy"
+Repository = "https://github.com/vmware-skills/VMware-Policy"
+Issues = "https://github.com/vmware-skills/VMware-Policy/issues"
+Changelog = "https://github.com/vmware-skills/VMware-Policy/blob/main/RELEASE_NOTES.md"
+
 [tool.hatch.build.targets.wheel]
 packages = ["vmware_policy"]
 
