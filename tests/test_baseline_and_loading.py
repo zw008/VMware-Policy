@@ -3,8 +3,8 @@
 Consolidates the still-relevant coverage from the old test_default_rules.py and
 test_20260719_review.py after approval tiers and the require-declared-environment
 gate were removed: the packaged baseline is allow-all + audit-all, a user
-rules.yaml replaces it entirely, an unreadable user file fails permissive-and-
-loud, and a hand-written min_risk typo widens a deny rule rather than crashing.
+rules.yaml replaces it entirely, an unreadable user file fails closed-and-loud,
+and a hand-written min_risk typo widens a deny rule rather than crashing.
 """
 
 from __future__ import annotations
@@ -57,13 +57,20 @@ def test_user_file_wins_entirely(engine):
     assert eng.check_allowed("vm_clean_slate", risk_level="critical").allowed is False
 
 
-def test_unreadable_user_file_fails_permissive_and_loud(engine):
-    """A user file that exists but will not parse does NOT fall back to the
+def test_unreadable_user_file_fails_closed_and_loud(engine):
+    """A user file that exists but will not load does NOT fall back to the
     shipped baseline (applying rules the operator never wrote is the wrong
-    surprise). It reports 'user-invalid' and enforces nothing."""
+    surprise) and does NOT continue permissively.
+
+    This assertion was inverted until 2026-08-30. It read "enforces nothing"
+    and passed, which is how a UTF-8 rules.yaml on a cp936 host could turn a
+    ``freeze-production-writes`` deny into an ALLOW with every test green: the
+    suite had written the wrong failure direction down as the contract. See
+    ``tests/eval/regression/test_gbk_locale_rules_load.py``.
+    """
     eng = engine("deny: [ unclosed\n")
-    assert eng.active_rules_source() == "user-invalid"
-    assert eng.check_allowed("vm_delete", risk_level="critical").allowed
+    assert eng.active_rules_source() == "user-unreadable"
+    assert eng.check_allowed("vm_delete", risk_level="critical").allowed is False
 
 
 def test_deny_min_risk_typo_widens_rather_than_crashing(engine):

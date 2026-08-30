@@ -107,6 +107,12 @@ class PolicyEngine:
         self._rules: dict[str, Any] = {}
         self._mtime: float = 0.0
         self._source: str = "none"
+        #: ``None`` only after a rule set was genuinely loaded. Everything else
+        #: — decode error, YAML syntax error, unreadable packaged baseline —
+        #: leaves a message here and every check fails CLOSED on it. It is a
+        #: separate field, not an empty ``_rules``, precisely because an empty
+        #: rule set is a legitimate loaded state that must keep allowing.
+        self._load_error: str | None = None
         self._load_rules()
 
     def _load_rules(self) -> None:
@@ -116,46 +122,100 @@ class PolicyEngine:
         ``rules.yaml`` owns policy completely, and an empty ``deny: []`` in their
         file means exactly that (no denials, not "inherit the baseline's").
 
-        A user file that exists but cannot be parsed does NOT fall back. Applying
-        shipped rules the operator never wrote, while their real ones are broken,
-        is the wrong surprise for a policy engine; the failure stays loud and the
-        engine stays permissive so a YAML typo cannot lock anyone out.
+        A user file that exists but cannot be read does NOT fall back to the
+        shipped baseline — applying rules the operator never wrote, while their
+        real ones are broken, is the wrong surprise. It fails CLOSED instead:
+        ``_load_error`` is set and :meth:`check_allowed` denies everything until
+        the file is fixed. See that method for why "everything".
+
+        Files are read as UTF-8 explicitly. Letting ``open()`` pick the locale's
+        codec is what disarmed this engine on a cp936 (GBK) Windows host: a UTF-8
+        ``rules.yaml`` raised ``UnicodeDecodeError``, and — before the CLOSED
+        state above existed — a ``freeze-production-writes`` rule flipped to
+        ALLOW. GBK is worse than it looks: many UTF-8 byte pairs *are* valid GBK,
+        so the alternative outcome is silent mojibake rather than an exception.
         """
         import yaml
 
         if not self._path.exists():
             try:
-                with open(DEFAULT_RULES_PATH) as fh:
+                with open(DEFAULT_RULES_PATH, encoding="utf-8") as fh:
                     self._rules = yaml.safe_load(fh) or {}
                 self._source = "packaged-default"
+                self._load_error = None
                 self._mtime = 0.0
                 _log.debug("No %s — using packaged policy baseline", self._path)
-            except Exception:
-                _log.warning("Packaged policy baseline unreadable", exc_info=True)
+            except Exception as exc:
+                _log.error(
+                    "Packaged policy baseline %s is unreadable — failing CLOSED",
+                    DEFAULT_RULES_PATH,
+                    exc_info=True,
+                )
                 self._rules = {}
-                self._source = "none"
+                self._source = "baseline-unreadable"
+                self._load_error = self._describe_load_failure(DEFAULT_RULES_PATH, exc)
                 self._mtime = 0.0
             return
 
         try:
             self._mtime = self._path.stat().st_mtime
-            with open(self._path) as fh:
+            with open(self._path, encoding="utf-8") as fh:
                 self._rules = yaml.safe_load(fh) or {}
             self._source = "user"
+            self._load_error = None
             _log.debug("Loaded %d policy rules from %s", len(self._rules), self._path)
-        except Exception:
-            _log.warning("Failed to load policy rules from %s", self._path, exc_info=True)
+        except Exception as exc:
+            _log.error(
+                "Failed to load policy rules from %s — failing CLOSED: every "
+                "operation is denied until the file loads",
+                self._path,
+                exc_info=True,
+            )
             self._rules = {}
-            self._source = "user-invalid"
+            self._source = "user-unreadable"
+            self._load_error = self._describe_load_failure(self._path, exc)
+
+    @staticmethod
+    def _describe_load_failure(path: Path, exc: Exception) -> str:
+        """The teaching text an operator sees on every denied call.
+
+        It has to name the file, say what is wrong with it, and give the way out
+        — a gate with no documented exit is an outage. The encoding case gets its
+        own sentence because "invalid YAML" is the wrong thing to go looking for
+        when the real problem is that the file is not UTF-8.
+        """
+        if isinstance(exc, UnicodeDecodeError):
+            detail = (
+                f"it is not valid UTF-8 ({exc.reason} at byte {exc.start}). "
+                "Re-save it as UTF-8 — on Windows, Notepad's 'Save as' encoding "
+                "dropdown, or `Set-Content -Encoding utf8`."
+            )
+        else:
+            detail = f"{type(exc).__name__}: {exc}"
+        return (
+            f"Policy rules could not be loaded from {path}: {detail} "
+            "Every operation is denied until it loads — the engine cannot know "
+            "which operations that file was gating. Fix the file (it is re-read "
+            "automatically), or set VMWARE_POLICY_DISABLED=1 to run with no "
+            "policy at all."
+        )
 
     def active_rules_source(self) -> str:
         """Where the rules in force came from.
 
         One of ``user`` (the operator's rules.yaml), ``packaged-default`` (the
-        shipped baseline, because no user file exists), ``user-invalid`` (their
-        file exists but would not parse — rules are empty, nothing is enforced),
-        or ``none``. Surfaced so an operator can tell "my policy is active" from
-        "my policy silently failed to load" without reading logs.
+        shipped baseline, because no user file exists), ``user-unreadable`` (their
+        file exists but would not load — **nothing is permitted** until it does),
+        or ``baseline-unreadable`` (no user file and the shipped baseline is
+        broken too — likewise nothing is permitted). Surfaced so an operator can
+        tell "my policy is active" from "my policy failed to load" without
+        reading logs.
+
+        The two ``*-unreadable`` names replaced ``user-invalid``/``none`` in the
+        cp936 fix. The rename is deliberate: those strings were documented as
+        "rules are empty, nothing is enforced", which is now the exact opposite
+        of what they mean, and a reader who pattern-matched the old name would
+        have carried the old assumption across silently.
         """
         self._maybe_reload()
         return self._source
@@ -169,7 +229,7 @@ class PolicyEngine:
                     self._path,
                 )
                 self._load_rules()
-            elif self._source not in ("packaged-default", "none"):
+            elif self._source not in ("packaged-default", "baseline-unreadable"):
                 self._load_rules()
             return
         try:
@@ -214,7 +274,34 @@ class PolicyEngine:
 
         self._maybe_reload()
 
-        # No rules file → allow everything
+        # ── Rules could not be loaded → deny everything ───────────────
+        # The failure direction this engine got wrong until 2026-08-30: a
+        # rules file that would not decode left `_rules` empty, which is
+        # indistinguishable from "the operator wrote no rules", so a measured
+        # `freeze-production-writes` deny came back ALLOW on a GBK host.
+        #
+        # "Closed" here means *every* operation, not just writes, and not just
+        # the high-risk ones. Three narrower definitions were considered:
+        #
+        #   - refuse to construct the engine — turns a one-line YAML typo into
+        #     an import-time traceback in 15 skills with nothing to read;
+        #   - deny only writes — assumes reads are safe, which is false in this
+        #     family: `get_supervisor_kubeconfig` is a READ tool that returns a
+        #     live Supervisor JWT, and freezing exactly that is a rule an
+        #     operator plausibly writes;
+        #   - deny only what the missing rules would have gated — unknowable.
+        #     Not knowing is the whole condition; guessing narrow is guessing
+        #     permissive.
+        #
+        # So: everything, with a reason that names the file and the way out.
+        # `VMWARE_POLICY_DISABLED=1` is checked above this line on purpose —
+        # the escape hatch must not itself depend on the rules loading.
+        if self._load_error is not None:
+            return PolicyResult(
+                allowed=False, rule="rules_unreadable", reason=self._load_error
+            )
+
+        # Loaded, and empty — the operator wrote no rules. Allow everything.
         if not self._rules:
             return PolicyResult(allowed=True, rule="no_rules")
 

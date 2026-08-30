@@ -192,12 +192,18 @@ def policy(
     explain = {
         "user": f"your rules file ({engine._path})",
         "packaged-default": f"the shipped baseline ({DEFAULT_RULES_PATH}) — you have no {engine._path}",
-        "user-invalid": f"NOTHING — {engine._path} exists but failed to parse, so no rules are enforced",
-        "none": "NOTHING — no rules could be loaded",
+        "user-unreadable": f"NOTHING — {engine._path} exists but would not load",
+        "baseline-unreadable": f"NOTHING — the shipped baseline ({DEFAULT_RULES_PATH}) would not load",
     }
-    colour = {"user": "green", "packaged-default": "cyan", "user-invalid": "red", "none": "red"}
+    colour = {"user": "green", "packaged-default": "cyan"}
 
-    console.print(f"[bold]Rules in force:[/bold] [{colour[source]}]{explain[source]}[/]")
+    # Unknown sources read as broken, not as fine. `.get` with a red default is
+    # the fail-closed direction for the report too: a state this command has not
+    # been taught about must not be printed in green.
+    console.print(
+        f"[bold]Rules in force:[/bold] "
+        f"[{colour.get(source, 'red')}]{explain.get(source, f'UNKNOWN state {source!r}')}[/]"
+    )
 
     deny = engine._rules.get("deny") or []
     window = engine._rules.get("maintenance_window")
@@ -205,10 +211,9 @@ def policy(
         f"  {len(deny)} deny rule(s), maintenance window: {'set' if window else 'none'}"
     )
 
-    if source == "user-invalid":
+    if engine._load_error is not None:
         console.print(
-            "\n[red]Every operation is currently unrestricted.[/] "
-            "Fix the YAML syntax, then re-run this command."
+            f"\n[red]Every operation is currently DENIED.[/] {engine._load_error}"
         )
         raise typer.Exit(code=1)
 

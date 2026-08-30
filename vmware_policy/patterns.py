@@ -141,7 +141,14 @@ class PatternEngine:
         for path in sorted(self._dir.glob("*.yaml")):
             try:
                 new_mtimes[path] = path.stat().st_mtime
-                with open(path) as fh:
+                # encoding is explicit: the locale's codec turned a UTF-8
+                # rules.yaml into a UnicodeDecodeError on the reporter's cp936
+                # host. The direction of *this* loader's failure is already
+                # safe (an unloadable pattern is simply not armed, see the
+                # module docstring), but reading a UTF-8 file as GBK can also
+                # mojibake rather than raise, and a silently mis-decoded
+                # pattern_id would arm the wrong pattern.
+                with open(path, encoding="utf-8") as fh:
                     raw = yaml.safe_load(fh) or {}
                 pat = self._validate(raw, path)
                 if pat is not None:
