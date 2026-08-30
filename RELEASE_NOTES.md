@@ -1,3 +1,48 @@
+## v1.10.0 — the audit row stopped filing the credentials it records
+
+Two additions, both consumed by every skill in the family. **Release this
+before any dependant that uses them, and raise that dependant's floor to
+1.10.0 first** — a skill calling the new API against 1.9.0 dies at import.
+
+**The audit database was storing tool return values verbatim.**
+`get_supervisor_kubeconfig`'s own docstring says "do not log or share", and the
+`@vmware_tool` decorator wrapping it was logging it: a live Supervisor JWT,
+plaintext, in `~/.vmware/audit.db`. Reproduced by reading the row back out of
+SQLite, not inferred. The audit log is also the artefact most likely to be
+copied off the machine, attached to a ticket, or handed to a vendor, which is
+what makes it worse than an ordinary log leak.
+
+Redaction that existed covered arguments (`sensitive_params`) and exception
+text, and nothing at all covered a return value. Now two layers, both in the
+shared decorator rather than in each tool, because a per-tool marker is one some
+tool will forget (形态 #7):
+
+- `@vmware_tool(sensitive_result=True)` — the declaration; the result becomes
+  exactly `"[redacted: return value declared sensitive]"`, not truncated and not
+  hashed, because a partial token in a log is still a finding.
+- a credential-key net that runs on **every** audited result, declared or not.
+  Exact key match, case-insensitive with `-`/`_` folded — not substring, so
+  `token_count` survives.
+
+The record itself is untouched: who, when, with what arguments, and whether it
+succeeded. The returned secret was never part of that, which is why dropping it
+costs nothing.
+
+**Parameter descriptions now reach the JSON schema.** Across the family, 327
+tools and roughly a thousand parameters had 0% coverage of `description`,
+`enum` and `additionalProperties` — while 949 of those parameters were already
+described in a Google-style `Args:` block that no client ever sees. On a real
+estate that produced a silent failure with no error at any stage: a parameter
+name guessed wrong is discarded and the tool returns the full unfiltered result;
+a value guessed wrong (`power_state="running"`) returns 0 rows where there were
+11.
+
+`describe_tool_parameters(mcp._tool_manager._tools)` copies what is already
+written, so the docstring becomes load-bearing and the two cannot drift. It
+removes the `Args:` block from the description once copied — both travel in
+every `tools/list` response, and leaving it bills the same sentences twice
+against each manifest's token budget.
+
 ## v1.9.0 — packaging metadata: the PyPI page now links back to the source
 
 `vmware-policy` is a transitive dependency of every skill in the family, so its
