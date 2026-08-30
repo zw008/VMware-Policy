@@ -3,7 +3,8 @@
 Responsibilities:
   1. Pre-check: evaluate policy rules (deny, maintenance window)
   2. Execute: run the actual tool function
-  3. Post-log: write audit record to ``~/.vmware/audit.db``
+  3. Post-log: write audit record to ``~/.vmware/audit.db``, with credentials
+     scrubbed out of both the arguments and the return value
   4. Metadata: attach risk_level, idempotent, timeout, sensitive_params
 
 Usage::
@@ -123,6 +124,7 @@ def vmware_tool(
     idempotent: bool = False,
     timeout_seconds: int = 300,
     sensitive_params: list[str] | None = None,
+    sensitive_result: bool = False,
     undo: Any = None,
 ) -> Any:
     """Decorator for all VMware MCP tool functions.
@@ -141,6 +143,13 @@ def vmware_tool(
         timeout_seconds: Maximum execution time before warning — exceeding it
             logs a warning (no hard cancellation).
         sensitive_params: Parameter names to redact in audit logs.
+        sensitive_result: The tool's return value *is* a credential — a
+            kubeconfig, a bearer token, a password. The audit row then records
+            the call (who, when, which arguments, whether it succeeded) but
+            files the result as ``"[redacted: return value declared
+            sensitive]"``. The caller still receives the real value; only the
+            audit copy is redacted. See :func:`_redact_credential_keys` for the
+            net that catches a tool which forgets to declare.
         undo: Optional callable ``(params, result) -> dict | None`` returning an
             inverse descriptor ``{"tool", "params", "skill"?, "note"?}``. On a
             successful call the inverse is recorded to ~/.vmware/undo.db and the
@@ -169,6 +178,7 @@ def vmware_tool(
                     risk_level,
                     timeout_seconds,
                     undo,
+                    sensitive_result,
                 )
                 # Fresh binding per call, restored below: a nested tool's
                 # `report_tool_failure` must not mark its caller failed, and a
@@ -207,6 +217,7 @@ def vmware_tool(
                     risk_level,
                     timeout_seconds,
                     undo,
+                    sensitive_result,
                 )
                 # Fresh binding per call, restored below: a nested tool's
                 # `report_tool_failure` must not mark its caller failed, and a
@@ -239,6 +250,7 @@ def vmware_tool(
         wrapper._idempotent = idempotent
         wrapper._timeout_seconds = timeout_seconds
         wrapper._sensitive_params = list(_sensitive)
+        wrapper._sensitive_result = sensitive_result
         return wrapper
 
     # Support @vmware_tool and @vmware_tool(...)
@@ -274,6 +286,7 @@ class _CallState:
         "rationale",
         "approved_by",
         "undo",
+        "sensitive_result",
     )
 
     def __init__(
@@ -286,8 +299,10 @@ class _CallState:
         risk_level: str,
         timeout_seconds: int,
         undo: Any = None,
+        sensitive_result: bool = False,
     ) -> None:
         self.undo = undo
+        self.sensitive_result = sensitive_result
         self.skill = _infer_skill(func)
         self.tool_name = func.__name__
         self.agent = detect_agent()
@@ -402,8 +417,13 @@ def _annotate_result(state: _CallState, result: Any) -> Any:
     that never happened, and fed ``success=True`` to the circuit breaker, which
     is why layer three of CLAUDE.md's recovery model never tripped for most of
     the family. Detecting the returned failure first restores all three.
+
+    A tool that declared ``sensitive_result`` contributes only the sentinel to
+    the audit row — the credential itself never lands on ``state``, so no later
+    step can carry it into a column the redaction does not cover. The caller
+    still receives the real object, and ``_record_undo`` below still sees it.
     """
-    state.result = result
+    state.result = _REDACTED_DECLARED if state.sensitive_result else result
     if _returned_failure(result) or _failure_signal.get() is not None:
         state.status = "error"
     if state.pattern_match and state.pattern_match.armed and isinstance(result, dict):
@@ -502,7 +522,9 @@ def _finalize(state: _CallState) -> None:
         state.skill,
         state.tool_name,
         params=state.safe_params,
-        result=_with_pattern_context(state.result, pattern_id, pattern_armed),
+        result=_with_pattern_context(
+            _redact_credential_keys(state.result), pattern_id, pattern_armed
+        ),
         status=final_status,
         duration_ms=duration,
         agent=state.agent,
@@ -549,6 +571,97 @@ def _redact_value(value: Any, sensitive: set[str]) -> Any:
         return _redact(value, sensitive)
     if isinstance(value, (list, tuple)):
         return type(value)(_redact_value(item, sensitive) for item in value)
+    return value
+
+
+# ── Result redaction ──────────────────────────────────────────────────
+#
+# The audit row exists to answer "this tool was called, by whom, when, with
+# which arguments, and did it succeed". A credential the tool *returned* is no
+# part of that answer, and audit.db is the artefact most likely to be copied off
+# the machine and attached to a ticket — so a secret filed there is worse than
+# one in a log. Both redactions below rewrite the audit copy only; the caller
+# always receives the real value, which is the entire point of tools like
+# vmware-vks's ``get_supervisor_kubeconfig``.
+
+#: What a tool that declared ``sensitive_result=True`` contributes instead of
+#: its return value. A truncated or hashed secret is still a finding, so the
+#: field is either absent or says plainly that it was dropped.
+_REDACTED_DECLARED = "[redacted: return value declared sensitive]"
+
+#: What replaces a value filed under one of :data:`_CREDENTIAL_KEYS`.
+_REDACTED_KEY = "[redacted: credential-shaped key]"
+
+#: Key names whose value is never stored in an audit row, declaration or not.
+#:
+#: The declaration is the contract; this is the net for when a tool forgets it,
+#: which CLAUDE.md 形态 #7 says will happen — a family-wide pattern fixed in one
+#: repo and left alone in the other fourteen is this project's most repeated
+#: failure. A new tool returning ``{"kubeconfig": ...}`` or ``{"token": ...}``
+#: is therefore safe before anyone has thought about it.
+#:
+#: Matching is an EXACT (case-insensitive, ``-``/``_`` folded) key comparison,
+#: not a substring search: ``token_count`` and ``secret_manager_url`` are not
+#: credentials, and a check whose name promises more than it verifies is its own
+#: recurring defect (形态 #4). A credential under a key not listed here — say
+#: ``avi_password`` — is exactly what ``sensitive_result=True`` is for.
+_CREDENTIAL_KEYS = frozenset(
+    {
+        "access_token",
+        "api_key",
+        "apikey",
+        "auth",
+        "auth_token",
+        "authorization",
+        "bearer",
+        "bearer_token",
+        "client_secret",
+        "credential",
+        "credentials",
+        "kubeconfig",
+        "passwd",
+        "password",
+        "private_key",
+        "pwd",
+        "refresh_token",
+        "secret",
+        "session_key",
+        "session_token",
+        "sessionkey",
+        "token",
+    }
+)
+
+
+def _is_credential_key(key: Any) -> bool:
+    return str(key).strip().lower().replace("-", "_") in _CREDENTIAL_KEYS
+
+
+def _redact_credential_keys(value: Any) -> Any:
+    """Return ``value`` with credential-keyed entries replaced, recursively.
+
+    Returns the *same object* when nothing matched, so an ordinary tool's result
+    reaches the audit row byte-identical to what it returned and nothing is
+    copied for no reason. When something does match, new containers are built —
+    the object handed back to the caller is never mutated.
+    """
+    if isinstance(value, dict):
+        redacted: dict[Any, Any] = {}
+        changed = False
+        for key, item in value.items():
+            if _is_credential_key(key):
+                redacted[key] = _REDACTED_KEY
+                changed = True
+            else:
+                new_item = _redact_credential_keys(item)
+                changed = changed or new_item is not item
+                redacted[key] = new_item
+        return redacted if changed else value
+    if isinstance(value, (list, tuple)):
+        items = [_redact_credential_keys(item) for item in value]
+        if all(new is old for new, old in zip(items, value)):
+            return value
+        return items if isinstance(value, list) else tuple(items)
     return value
 
 

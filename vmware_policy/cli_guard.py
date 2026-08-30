@@ -27,7 +27,12 @@ from functools import wraps
 from typing import Any, Callable
 
 from vmware_policy.audit import detect_agent
-from vmware_policy.decorators import _bind_params, _infer_skill, _redact
+from vmware_policy.decorators import (
+    _bind_params,
+    _infer_skill,
+    _redact,
+    _redact_credential_keys,
+)
 from vmware_policy.guard import audit_call, guard
 from vmware_policy.policy import PolicyDenied
 from vmware_policy.sanitize import sanitize
@@ -119,8 +124,15 @@ def guarded(
                 audit_call(
                     skill,
                     tool_name,
+                    # Same credential-key net as @vmware_tool: both surfaces
+                    # write the one audit sink, so scrubbing only one of them
+                    # would leave the leak reachable from the other (I-3/I-8,
+                    # and CLAUDE.md 形态 #7). There is no ``sensitive_result``
+                    # counterpart here because a Typer command returns None and
+                    # prints instead — add one the day a CLI command returns a
+                    # credential, not before.
                     params=safe,
-                    result=result,
+                    result=_redact_credential_keys(result),
                     status=status,
                     duration_ms=int((time.time() - start) * 1000),
                     agent=detect_agent(),
