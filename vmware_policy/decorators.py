@@ -665,19 +665,128 @@ def _redact_credential_keys(value: Any) -> Any:
     return value
 
 
-# Matches ``key=value`` / ``key: value`` / ``key"="value`` for common secret
-# keys in free-form exception text. Value runs until whitespace, quote, comma,
-# or '@' (to keep host:port that often follows a credential in DSNs).
-_SECRET_TEXT_RE = re.compile(
-    r"(?i)\b(password|passwd|pwd|token|secret|api[_-]?key|authorization|bearer)"
-    r"(\s*[=:]\s*|\s+)"
-    r"['\"]?[^\s'\",@]+",
+# ── Free-form text redaction ──────────────────────────────────────────
+#
+# The other half of _redact_credential_keys. Key-based redaction cannot reach a
+# credential that is inside an *exception message*: that is one string, not a
+# dict, and the credential is in the middle of it.
+#
+# The keyword alternation is DERIVED from _CREDENTIAL_KEYS rather than written
+# out again. Two hand-maintained lists of the same names drift, and the drift is
+# invisible — a name added to one is simply not redacted by the other (CLAUDE.md
+# 形态 #6). ``_`` is relaxed to ``[_-]?`` so ``api_key`` also covers ``api-key``
+# and ``apikey``.
+_SECRET_WORDS = "|".join(
+    re.escape(k).replace("_", "[_-]?")
+    for k in sorted(_CREDENTIAL_KEYS, key=len, reverse=True)
+)
+
+#: A credential name may be the *tail* of a longer identifier — ``access_token``,
+#: ``client_secret``, ``VMWARE_VC_PASSWORD``, ``config.password``. The previous
+#: pattern anchored on ``\b`` before the keyword, so every one of those leaked.
+#: The keyword still has to end the identifier: the separator that follows can
+#: only be ``:``/``=`` (optionally quoted), which is why ``token_count=5120`` and
+#: ``secret_manager_url=...`` are not credentials and stay readable.
+_KEY_PREFIX = r"[\w.\-]*(?:" + _SECRET_WORDS + r")"
+
+#: Value characters. ``@`` is *included* — ``password=P@ssw0rd`` used to redact a
+#: single character and print the rest. DSN userinfo, which is why ``@`` was
+#: excluded, has its own rule below and runs first.
+_VALUE = r"[^\s'\",;&\]\}\)<>]+"
+
+#: HTTP auth schemes. The Authorization rule below deliberately leaves the scheme
+#: visible ("Basic" vs "Bearer" is the difference between two different
+#: diagnoses), so the generic key=value rule that runs after it must not come
+#: back and redact the scheme it just preserved.
+_AUTH_SCHEMES = r"basic|bearer|digest|negotiate|ntlm|token|apikey"
+_NOT_A_SCHEME = r"(?!(?:" + _AUTH_SCHEMES + r")\s)"
+
+_REDACTIONS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # PEM private key blocks — no key=value shape at all, previously untouched.
+    (
+        re.compile(
+            r"(-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----)"
+            r".*?"
+            r"(-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY-----)",
+            re.DOTALL,
+        ),
+        r"\1***\2",
+    ),
+    # URL / DSN userinfo: scheme://user:secret@host
+    (
+        re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://[^\s/:@]+):([^\s/@]+)@"),
+        r"\1:***@",
+    ),
+    # Cookie / Set-Cookie: the whole header value is credential material.
+    (re.compile(r"(?i)\b((?:set-)?cookie)(\s*[:=]\s*)[^\r\n]+"), r"\1\2***"),
+    # Authorization: <scheme> <credential>. The scheme is diagnostic and stays;
+    # everything after it goes. The old pattern masked the word "Basic" and left
+    # the base64 — the example named in the re-test report.
+    (
+        re.compile(
+            r"(?i)\b((?:proxy-)?authorization)"
+            r"(\s*['\"]?\s*[:=]\s*['\"]?\s*)"
+            r"(" + _AUTH_SCHEMES + r")"
+            r"(\s+)"
+            r"[^\s'\",;]+"
+        ),
+        r"\1\2\3\4***",
+    ),
+    # A bare scheme + credential, with no Authorization: in front of it. The
+    # length floor keeps "Basic health check passed" and "Bearer of record"
+    # readable — over-redaction destroys the teaching errors.
+    (
+        re.compile(r"(?i)\b(basic|bearer)(\s+)([A-Za-z0-9+/=_.\-]{16,})(?![\w+/=.\-])"),
+        r"\1\2***",
+    ),
+    # SOAP / XML element: <password>secret</password>
+    (
+        re.compile(r"(?i)<(" + _KEY_PREFIX + r")>[^<]*</\1>"),
+        r"<\1>***</\1>",
+    ),
+    # Quoted value — how a traceback prints a dict: {"token": "x"} / {'pwd': 'x'}
+    (
+        re.compile(
+            r"(?i)(" + _KEY_PREFIX + r")(['\"]?\s*[:=]\s*)(['\"])"
+            + _NOT_A_SCHEME
+            + r"[^'\"\r\n]*\3"
+        ),
+        r"\1\2\3***\3",
+    ),
+    # CLI flag: --password secret / -token secret (whitespace separator, but only
+    # after a dash, so "password policy requires 15 characters" survives).
+    (
+        re.compile(r"(?i)(-{1,2}[\w\-]*(?:" + _SECRET_WORDS + r"))(\s+)[^\s'\",;]+"),
+        r"\1\2***",
+    ),
+    # Unquoted key=value / key: value.
+    (
+        re.compile(r"(?i)(" + _KEY_PREFIX + r")(\s*[:=]\s*)" + _NOT_A_SCHEME + _VALUE),
+        r"\1\2***",
+    ),
+    # A bare JWT with no key in front of it — a Supervisor token pasted into an
+    # error message is self-identifying and needs no keyword.
+    (
+        re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]*"),
+        "***",
+    ),
 )
 
 
 def _redact_secrets_text(text: str) -> str:
-    """Redact ``password=...`` / ``token: ...`` style secrets in free-form text."""
-    return _SECRET_TEXT_RE.sub(r"\1\2***", text)
+    """Redact credential values in free-form text (exception messages, tracebacks).
+
+    Ordered rules, most specific first: the DSN rule has to run before the
+    generic ``key=value`` one, and the ``Authorization:`` rule before the bare
+    ``Basic``/``Bearer`` one, or the broader pattern eats the narrower one's
+    context and the result is less readable for no gain in safety.
+
+    Idempotent: re-running it over already-redacted text leaves it unchanged, so
+    a string that passes through two layers is not corrupted.
+    """
+    for pattern, replacement in _REDACTIONS:
+        text = pattern.sub(replacement, text)
+    return text
 
 
 def _with_pattern_context(result: Any, pattern_id: str, armed: bool) -> Any:
