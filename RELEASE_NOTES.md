@@ -1,3 +1,42 @@
+## v1.11.0 — the policy engine stopped failing open
+
+**Read this before upgrading: one behaviour changes visibly.** An operator whose
+`rules.yaml` cannot be read moves from *everything allowed* to *everything
+denied*. That is the correct direction and it is why this is a minor bump rather
+than a patch.
+
+On a Windows host with locale cp936, reading the UTF-8 `rules.yaml` raised a
+decode error, the exception was swallowed, and the engine continued with no
+rules — so a `freeze-production-writes` rule that should DENY came back ALLOW.
+Reproduced end to end in a child interpreter with an ASCII default codec, on
+bytes asserted to be valid UTF-8 and invalid GBK, not by mocking the codec.
+
+Two independent defects, fixed separately. `encoding="utf-8"` on all three text
+reads — the report named one, and GBK often mojibakes rather than raising, so a
+mis-decoded `pattern_id` would arm the wrong pattern rather than none. And
+"unreadable" and "the operator wrote no rules" were the same state; they are now
+distinct, and the first denies.
+
+Every operation is denied, not just writes: `get_supervisor_kubeconfig` is a
+READ tool that returns a live Supervisor JWT, and freezing exactly that is a
+plausible operator rule. The denial names the file and the exit;
+`VMWARE_POLICY_DISABLED=1` is checked above the rules, so the escape hatch does
+not depend on rules loading, and a corrected file re-arms on the next call.
+
+**The secret-redaction pattern was catching 41.7% of what it claimed.** Measured
+against 60 leak shapes drawn from real vSphere/NSX/AVI/Aria exception text: 25
+redacted before, 60 after, with no over-redaction of 10 benign controls. Four
+distinct causes, not one — a `\b` anchor that let `access_token=` through, a
+separator that could not be `":"` so `{"token": "abc"}` never matched, `@`
+excluded from the value class, and whole shapes with no rule at all.
+`Authorization: Basic <base64>` masked the word `Basic` and left the credential.
+The keyword list is now derived from `_CREDENTIAL_KEYS` rather than written a
+second time.
+
+Also: a test named `test_unreadable_user_file_fails_permissive_and_loud`
+asserted the fail-open and passed. The suite had the wrong failure direction
+written down as the contract. It is inverted and renamed.
+
 ## v1.10.0 — the audit row stopped filing the credentials it records
 
 Two additions, both consumed by every skill in the family. **Release this
