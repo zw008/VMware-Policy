@@ -216,6 +216,10 @@ def test_unreadable_rules_file_fails_closed(tmp_path):
             "the denial must state the documented way out, or an operator who "
             "typos their YAML is locked out with no instructions"
         )
+        assert "\n" not in r.reason, (
+            "PolicyResult.reason is surfaced as one message by every caller; a "
+            "raw yaml.ParserError is five lines with the file quoted twice"
+        )
 
 
 def test_undecodable_rules_file_fails_closed_and_says_so(tmp_path):

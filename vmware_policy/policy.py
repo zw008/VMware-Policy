@@ -183,6 +183,10 @@ class PolicyEngine:
         — a gate with no documented exit is an outage. The encoding case gets its
         own sentence because "invalid YAML" is the wrong thing to go looking for
         when the real problem is that the file is not UTF-8.
+
+        Collapsed to a single line: callers surface ``reason`` as one message,
+        and a raw ``yaml.ParserError`` is five lines with the file quoted twice.
+        The full traceback is still in the log, via ``exc_info``.
         """
         if isinstance(exc, UnicodeDecodeError):
             detail = (
@@ -192,6 +196,7 @@ class PolicyEngine:
             )
         else:
             detail = f"{type(exc).__name__}: {exc}"
+        detail = " ".join(detail.split())
         return (
             f"Policy rules could not be loaded from {path}: {detail} "
             "Every operation is denied until it loads — the engine cannot know "
