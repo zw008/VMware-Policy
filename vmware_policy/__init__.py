@@ -1,6 +1,6 @@
 """VMware Policy — unified audit, policy enforcement, and sanitization for VMware MCP skills."""
 
-__version__ = "1.12.1"
+__version__ = "1.13.0"
 
 from vmware_policy.audit import AuditEngine, get_engine
 from vmware_policy.budget import BudgetExceeded, BudgetTracker, get_budget

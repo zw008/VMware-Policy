@@ -1,3 +1,34 @@
+## v1.13.0 — a version floor that says which of three things happened
+
+`vmware_policy.compat` explains a 404 from a call that only exists on a newer
+appliance as a version floor rather than a bad id. The generic remedy for a 404
+is "verify the id — list the parent collection and copy an exact UUID", and on a
+call the appliance simply does not have, that sends the operator hunting for a
+UUID that was never the problem.
+
+Three states, because two would lie:
+
+* below the floor — name both versions, and say the id is not the problem;
+* at or above it — return `None` so the caller keeps its own remedy. Telling
+  someone on 9.1 to upgrade to 9.0 is worse than saying nothing, and it buries
+  whatever actually went wrong;
+* unreadable version — say what the capability needs, and assert nothing about
+  their build. "We could not read it" must never render as "yours is too old".
+
+`at_least()` pads before comparing. `(9,) >= (9, 0)` is `False` in Python — the
+shorter tuple loses — so an appliance reporting a bare `"9"` would have been told
+to upgrade to the version it was already running. A wrong branch, taken silently,
+inside the module written to prevent exactly that.
+
+Also `fsperms.assert_owner_only`, the shared assertion for tests. Eighteen sites
+across the family compared `st_mode & 0o777 == 0o600` directly and every one of
+them failed on a Windows test host — not because the product was wrong, but
+because there are no POSIX mode bits there to compare, and nine real failures had
+to be picked out of that pile. It keeps the exact-mode assertion where the
+platform can express one, and falls back to "not readable by anyone else" where
+it cannot. `fsperms` was written for this problem; the sources were moved onto it
+and the tests were not.
+
 ## v1.12.1 — six leak shapes that were still standing, and two sentences that had been reversed
 
 Round 3 of the VCF 9 field testing rebuilt the redaction corpus from this lab's
