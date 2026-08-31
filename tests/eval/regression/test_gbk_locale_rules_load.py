@@ -103,7 +103,7 @@ def _run_under_ascii_locale(rules_path: Path) -> dict:
     proc = subprocess.run(
         [sys.executable, "-c", _CHILD, str(rules_path)],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
         env=env,
         cwd=str(Path(__file__).resolve().parents[3]),
     )

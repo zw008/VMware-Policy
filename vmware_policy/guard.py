@@ -47,7 +47,7 @@ def guard(
     (``resolve_environment``'s documented contract, and what ``@vmware_tool`` did
     at HEAD via ``self.env = resolve_environment(self.target)``).
     """
-    env = resolve_environment(target)
+    env = resolve_environment(target, skill=skill)
     result = get_policy_engine().check_allowed(
         tool, env=env, risk_level=risk_level, params=params or {}
     )

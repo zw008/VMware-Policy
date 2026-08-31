@@ -42,35 +42,61 @@ _log = logging.getLogger("vmware_policy.environment")
 EnvironmentResolver = Callable[[str], Optional[str]]
 
 _resolver: Optional[EnvironmentResolver] = None
+
+#: Per-skill resolvers, keyed by the skill name ``guard()`` is called with.
+#: The unkeyed ``_resolver`` above is the pre-1.12 slot, kept so a skill built
+#: against an older vmware-policy still resolves its own targets.
+_resolvers: dict[str, EnvironmentResolver] = {}
+
 _lock = threading.Lock()
 
 #: Emitted once per target so a misconfigured estate does not flood the log.
 _warned: set[str] = set()
 
 
-def set_environment_resolver(resolver: Optional[EnvironmentResolver]) -> None:
+def set_environment_resolver(
+    resolver: Optional[EnvironmentResolver], *, skill: Optional[str] = None
+) -> None:
     """Register (or clear, with ``None``) the target → environment lookup.
 
-    Call once at MCP server start-up. Later calls replace the previous resolver,
-    which is what tests want and what a re-imported server does.
+    Pass ``skill`` — the same name the skill gives :func:`guard` — so the lookup
+    is stored under that key. Without it the resolver lands in one
+    process-global slot, and that slot is a real hazard rather than a
+    theoretical one: on 2026-08-30 importing a sibling's server module was
+    measured turning a ``freeze-production-writes`` rule from DENY to ALLOW,
+    because twelve skills registered into the same slot at import time and the
+    last one won for all of them. One of the twelve answers a deliberate
+    constant (``vmware-harden`` only ever writes its own local store), which is
+    true of its own tools and false of everybody else's targets.
+
+    Keying does not make registering at import time wrong any more — a skill's
+    resolver now only ever answers for that skill.
+
+    The unkeyed form still works and still warns on replacement, so a skill
+    built against an older release keeps behaving exactly as it did.
     """
     global _resolver  # noqa: PLW0603
     with _lock:
+        if skill:
+            _resolvers[skill] = resolver  # type: ignore[assignment]
+            if resolver is None:
+                _resolvers.pop(skill, None)
+            _warned.clear()
+            return
         if resolver is not None and _resolver is not None and resolver is not _resolver:
-            # Two skills' servers imported into one process: the second
-            # registration silently takes over environment resolution for both,
-            # so the first skill's targets resolve against the wrong config and
-            # its environment-scoped rules quietly stop applying. Under the
-            # warn-only migration setting that would be invisible. Each skill
-            # normally runs as its own stdio process, so this is an embedder
-            # scenario — but it must be loud if it happens.
+            # Two skills' servers imported into one process, both built before
+            # keyed registration existed: the second registration takes over
+            # environment resolution for both, so the first skill's targets
+            # resolve against the wrong config and its environment-scoped rules
+            # quietly stop applying.
             _log.warning(
-                "Environment resolver replaced (%s -> %s). Environment "
-                "resolution is process-global: if two skills are loaded in one "
-                "process, the last registration wins for both, and rules scoped "
-                "by environment may stop applying to the first. An in-process "
-                "dispatcher must re-register the target skill's resolver around "
-                "each delegated call.",
+                "Environment resolver replaced (%s -> %s) in the unkeyed slot. "
+                "Environment resolution without a `skill=` key is "
+                "process-global: if two skills are loaded in one process, the "
+                "last registration wins for both, and rules scoped by "
+                "environment may stop applying to the first. Pass "
+                "skill=\"vmware-<name>\" to set_environment_resolver() to make "
+                "the registration per-skill.",
                 getattr(_resolver, "__qualname__", _resolver),
                 getattr(resolver, "__qualname__", resolver),
             )
@@ -78,7 +104,7 @@ def set_environment_resolver(resolver: Optional[EnvironmentResolver]) -> None:
         _warned.clear()
 
 
-def resolve_environment(target: str) -> str:
+def resolve_environment(target: str, skill: Optional[str] = None) -> str:
     """Return the environment ``target`` declares, or ``""`` if it declares none.
 
     An empty ``target`` is passed to the resolver rather than short-circuited:
@@ -92,7 +118,13 @@ def resolve_environment(target: str) -> str:
     policy decides what that means, rather than an exception escaping into a
     tool call.
     """
-    resolver = _resolver
+    resolver = _resolvers.get(skill) if skill else None
+    if resolver is None:
+        # No keyed registration for this skill: either it predates keying, or it
+        # genuinely registered nothing. The unkeyed slot is the compatibility
+        # answer for the first case; for the second it is empty and the target
+        # reads as unlabeled, which is the documented no-label behaviour.
+        resolver = _resolver
     if resolver is None:
         _warn_once(
             target,

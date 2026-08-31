@@ -1,3 +1,53 @@
+## v1.12.0 — one skill's environment resolver stopped answering for every other skill
+
+**The headline is a measured control failure, not a hardening.** With a
+`freeze-production-writes` deny rule on `prod-vc01`, a single
+`import vmware_harden.mcp_server.server` took that rule from DENY to ALLOW.
+Reproduced end to end in a venv holding all fifteen packages, against wheels
+built from the previous release:
+
+    BEFORE import vmware_harden   env='production'  allowed=False  rule=freeze-production-writes
+    AFTER  import vmware_harden   env='local'       allowed=True   rule=default_allow
+
+`set_environment_resolver` wrote one process-global slot and twelve servers
+registered into it at import time, so the last one won for all of them.
+vmware-harden's resolver answers a deliberate constant, `local` — true of its own
+tools, which only ever write its local DuckDB twin, and false of every other
+skill's targets.
+
+The fix is the key, not the constant: `set_environment_resolver(fn,
+skill="monitor")` stores per skill, `guard()` resolves under the skill it was
+already given, and Harden's answer stays right for Harden. Registration at import
+time is safe again as a result. The unkeyed form still works and still warns, so
+a skill built against an older release behaves exactly as it did — mixed versions
+degrade to today's behaviour, never worse.
+
+**`additionalProperties: false` now means it at call time.** All 327 tool schemas
+in the family declared unknown arguments closed and the runtime accepted them
+anyway — `list_namespaces(target="vc", bogus_param_xyz="whatever")` returned 200.
+FastMCP builds a pydantic model per signature and pydantic ignores extras, so a
+model that guesses a filter argument's name wrong got the *unfiltered* result
+with nothing to indicate anything was dropped. Missing *required* arguments were
+always rejected, which is why the hole looked like it could not be there.
+`describe_tool_parameters` now closes the generated model as well as the schema,
+so the declaration and the behaviour cannot drift.
+
+**New: `vmware_policy.fsperms`.** The `.env` permission check every doctor runs
+was POSIX-only, and on Windows it failed on every run with a remedy that did
+nothing — `chmod 600` exits 0 there and changes no bits. Measured on Windows
+Server 2025: `before: 644 / chmod 600 exit=0 / after: 644`. `check_secret_file`
+answers three states instead of two, and only a demonstrated exposure is a
+failure; "this platform cannot tell me" is reported as that, with `icacls` as the
+command that actually restricts the file. Passing quietly would be the other half
+of the same mistake — the file holds the passwords.
+
+**New: `vmware_policy.skill_name`.** `guard()`, `audit_call()` and the resolver
+registry all key by a skill's short name; three callers deriving it three ways is
+how those keys drift apart, and a drifted key silently resolves to the wrong
+skill's environment.
+
+All text reads in this package and its tests now name their encoding.
+
 ## v1.11.0 — the policy engine stopped failing open
 
 **Read this before upgrading: one behaviour changes visibly.** An operator whose

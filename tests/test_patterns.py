@@ -99,7 +99,7 @@ action:
 
 def _write(tmp_dir: Path, name: str, content: str) -> Path:
     p = tmp_dir / f"{name}.yaml"
-    p.write_text(content)
+    p.write_text(content, encoding="utf-8")
     return p
 
 

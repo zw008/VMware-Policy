@@ -33,7 +33,7 @@ def rules(tmp_path, monkeypatch):
 
     def make(text: str) -> PolicyEngine:
         p = tmp_path / "rules.yaml"
-        p.write_text(text)
+        p.write_text(text, encoding="utf-8")
         eng = PolicyEngine(rules_path=p)
         monkeypatch.setattr(guard_mod, "get_policy_engine", lambda: eng)
         return eng

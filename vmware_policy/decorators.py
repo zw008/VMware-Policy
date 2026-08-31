@@ -37,6 +37,7 @@ from typing import Any
 from vmware_policy.audit import detect_agent
 from vmware_policy.budget import BudgetExceeded, get_budget
 from vmware_policy.guard import audit_call, guard
+from vmware_policy.skills import skill_name
 from vmware_policy.patterns import PatternMatch, get_pattern_engine
 from vmware_policy.policy import PolicyDenied, PolicyResult
 from vmware_policy.sanitize import sanitize
@@ -540,12 +541,7 @@ def _infer_skill(func: Any) -> str:
     ``vmware_aiops.ops.vm_lifecycle`` → ``aiops``
     ``mcp_server.server`` → try the parent package → ``unknown``
     """
-    module = getattr(func, "__module__", "") or ""
-    parts = module.split(".")
-    for part in parts:
-        if part.startswith("vmware_"):
-            return part.replace("vmware_", "", 1)
-    return "unknown"
+    return skill_name(getattr(func, "__module__", "") or "")
 
 
 def _redact(params: dict[str, Any], sensitive: set[str]) -> dict[str, Any]:

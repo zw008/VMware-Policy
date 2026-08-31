@@ -146,7 +146,7 @@ class TestPatternIntegration:
             "approval:\n"
             "  status: approved\n"
             "  signed_by: test@example.com\n"
-        )
+        , encoding="utf-8")
         # Reset and reseat the pattern engine singleton on the temp dir
         import vmware_policy.patterns as pmod
         pmod._engine = pmod.PatternEngine(patterns_dir)
@@ -201,7 +201,7 @@ class TestPolicyDenied:
             "  - name: no-delete\n"
             '    operations: ["delete_*"]\n'
             "    reason: Deletion not allowed\n"
-        )
+        , encoding="utf-8")
         policy_mod._engine = None
         import vmware_policy.policy as pm
         pm._engine = pm.PolicyEngine(rules_path)

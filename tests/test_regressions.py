@@ -106,7 +106,7 @@ class TestAsyncTools:
             "  - name: no-delete\n"
             '    operations: ["delete_*"]\n'
             "    reason: Deletion not allowed\n"
-        )
+        , encoding="utf-8")
         policy_mod._engine = PolicyEngine(rules)
 
         @vmware_tool(risk_level="high")
@@ -154,10 +154,10 @@ class TestArmableMatchPreferred:
         # Loaded in sorted filename order: unsigned pattern first.
         (pdir / "a_unsigned.yaml").write_text(
             _PATTERN_TMPL.format(pid="pat-unsigned", approval=_UNSIGNED)
-        )
+        , encoding="utf-8")
         (pdir / "b_signed.yaml").write_text(
             _PATTERN_TMPL.format(pid="pat-signed", approval=_APPROVED)
-        )
+        , encoding="utf-8")
         engine = PatternEngine(pdir)
         m = engine.match(skill="aiops", tool="vm_restart", target="esxi-01")
         assert m is not None
@@ -169,7 +169,7 @@ class TestArmableMatchPreferred:
         pdir.mkdir()
         (pdir / "a_unsigned.yaml").write_text(
             _PATTERN_TMPL.format(pid="pat-unsigned", approval=_UNSIGNED)
-        )
+        , encoding="utf-8")
         engine = PatternEngine(pdir)
         m = engine.match(skill="aiops", tool="vm_restart", target="esxi-01")
         assert m is not None
@@ -207,7 +207,7 @@ class TestPositionalArgs:
             '    operations: ["*"]\n'
             '    environments: ["prod"]\n'
             "    reason: prod is frozen\n"
-        )
+        , encoding="utf-8")
         policy_mod._engine = PolicyEngine(rules)
         # env now comes from the target's declared environment, not its name.
         from vmware_policy.environment import set_environment_resolver
@@ -241,7 +241,7 @@ class TestPositionalArgs:
 class TestMaintenanceWindowFailClosed:
     def _engine_with_window(self, tmp_path, window_yaml: str) -> PolicyEngine:
         rules = tmp_path / "rules.yaml"
-        rules.write_text("maintenance_window:\n" + window_yaml)
+        rules.write_text("maintenance_window:\n" + window_yaml, encoding="utf-8")
         return PolicyEngine(rules)
 
     def test_malformed_window_denies_high_risk(self, tmp_path, caplog):
@@ -292,7 +292,7 @@ class TestSingletonHygiene:
     def test_get_policy_engine_warns_on_different_path(self, tmp_path, caplog):
         reset_policy_engine()
         try:
-            (tmp_path / "a.yaml").write_text("")
+            (tmp_path / "a.yaml").write_text("", encoding="utf-8")
             first = get_policy_engine(tmp_path / "a.yaml")
             with caplog.at_level(logging.WARNING, logger="vmware-policy.policy"):
                 second = get_policy_engine(tmp_path / "b.yaml")
@@ -509,7 +509,7 @@ class TestPolicyGlobMatching:
             "  - name: no-deletes\n"
             '    operations: ["*_delete"]\n'
             '    reason: "blocked"\n'
-        )
+        , encoding="utf-8")
         engine = PolicyEngine(rules_path=rules)
         assert engine.check_allowed("vm_delete").allowed is False
         assert engine.check_allowed("vm_info").allowed is True

@@ -1,13 +1,18 @@
 """VMware Policy — unified audit, policy enforcement, and sanitization for VMware MCP skills."""
 
-__version__ = "1.11.0"
+__version__ = "1.12.0"
 
 from vmware_policy.audit import AuditEngine, get_engine
 from vmware_policy.budget import BudgetExceeded, BudgetTracker, get_budget
 from vmware_policy.cli_guard import guarded
 from vmware_policy.decorators import PolicyDenied, report_tool_failure, vmware_tool
-from vmware_policy.toolschema import describe_tool_parameters, parse_args_section
+from vmware_policy.toolschema import (
+    describe_tool_parameters,
+    enforce_declared_parameters,
+    parse_args_section,
+)
 from vmware_policy.envelope import ENVELOPE_KEYS, paginated
+from vmware_policy.skills import skill_name
 from vmware_policy.environment import (
     mtime_cached_loader,
     resolve_environment,
@@ -26,6 +31,7 @@ from vmware_policy.undo import UndoStore, get_undo_store
 __all__ = [
     "vmware_tool",
     "describe_tool_parameters",
+    "enforce_declared_parameters",
     "parse_args_section",
     "guarded",
     "report_tool_failure",
@@ -35,6 +41,7 @@ __all__ = [
     "mtime_cached_loader",
     "set_environment_resolver",
     "resolve_environment",
+    "skill_name",
     "Pattern",
     "PatternMatch",
     "get_pattern_engine",

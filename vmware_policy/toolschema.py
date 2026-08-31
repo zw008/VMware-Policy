@@ -29,7 +29,11 @@ import inspect
 import re
 from typing import Any
 
-__all__ = ["describe_tool_parameters", "parse_args_section"]
+__all__ = [
+    "describe_tool_parameters",
+    "enforce_declared_parameters",
+    "parse_args_section",
+]
 
 #: The ``Args:`` block, up to the next Google-style section or the end.
 _ARGS_BLOCK = re.compile(
@@ -111,6 +115,8 @@ def describe_tool_parameters(tools: dict[str, Any]) -> int:
         if not isinstance(schema, dict):
             continue
         schema.setdefault("additionalProperties", False)
+        # Declaring it closed is not the same as closing it -- see
+        # enforce_declared_parameters, called at the end of this function.
         properties = schema.get("properties")
         if not isinstance(properties, dict) or not properties:
             continue
@@ -129,4 +135,44 @@ def describe_tool_parameters(tools: dict[str, Any]) -> int:
         trimmed = _strip_args_section(doc or "")
         if trimmed != doc:
             tool.description = trimmed.strip()
+    enforce_declared_parameters(tools)
     return described
+
+
+def enforce_declared_parameters(tools: dict[str, Any]) -> int:
+    """Make ``additionalProperties: false`` true at call time, not just on paper.
+
+    The schema said unknown arguments were rejected and the runtime accepted
+    them anyway. Measured on VKS, round 3::
+
+        list_namespaces(target="vc", bogus_param_xyz="whatever")  ->  200, no error
+
+    FastMCP builds a pydantic model from the tool's signature, and pydantic's
+    default is to ignore extras. So a model that guesses a filter argument wrong
+    gets the *unfiltered* result and no indication anything was dropped -- the
+    exact failure ``describe_tool_parameters`` was written to prevent, surviving
+    in the half nobody executed. Required arguments were always enforced, which
+    is why the gap looked like it could not exist.
+
+    ``extra="forbid"`` on the generated argument model turns the discard into a
+    validation error naming the offending argument. Required-argument checking
+    and every existing coercion are untouched.
+
+    Returns the number of tools whose models were closed, so a caller can assert
+    it did something rather than trust that it did (形态 #1).
+    """
+    closed = 0
+    for tool in tools.values():
+        model = getattr(getattr(tool, "fn_metadata", None), "arg_model", None)
+        config = getattr(model, "model_config", None)
+        if not isinstance(config, dict):
+            # A FastMCP that stopped exposing the model is a silent no-op here,
+            # and silence is what this whole module is about. The count returned
+            # to the caller is the signal; it does not raise, because refusing to
+            # import is a worse failure than an un-closed schema.
+            continue
+        if config.get("extra") != "forbid":
+            config["extra"] = "forbid"
+            model.model_rebuild(force=True)
+        closed += 1
+    return closed

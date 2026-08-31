@@ -10,7 +10,7 @@ class TestPolicyEngine:
     def test_empty_rules_allow_all(self, tmp_path):
         """An operator who writes an empty rules file gets no enforcement."""
         rules_path = tmp_path / "rules.yaml"
-        rules_path.write_text("")
+        rules_path.write_text("", encoding="utf-8")
         engine = PolicyEngine(rules_path)
         result = engine.check_allowed("delete_vm")
         assert result.allowed is True
@@ -31,7 +31,7 @@ class TestPolicyEngine:
             "  - name: no-delete\n"
             '    operations: ["delete_*"]\n'
             "    reason: No deletions allowed\n"
-        )
+        , encoding="utf-8")
         engine = PolicyEngine(rules)
         result = engine.check_allowed("delete_segment")
         assert result.allowed is False
@@ -46,7 +46,7 @@ class TestPolicyEngine:
             '    operations: ["delete_*"]\n'
             '    environments: ["production"]\n'
             "    reason: No deletions in prod\n"
-        )
+        , encoding="utf-8")
         engine = PolicyEngine(rules)
 
         prod = engine.check_allowed("delete_vm", env="production")
@@ -62,7 +62,7 @@ class TestPolicyEngine:
             "  - name: no-critical\n"
             "    min_risk_level: critical\n"
             "    reason: Critical ops blocked\n"
-        )
+        , encoding="utf-8")
         engine = PolicyEngine(rules)
 
         crit = engine.check_allowed("any_op", risk_level="critical")
@@ -78,7 +78,7 @@ class TestPolicyEngine:
             "  - name: block-all\n"
             '    operations: ["*"]\n'
             "    reason: Everything blocked\n"
-        )
+        , encoding="utf-8")
         engine = PolicyEngine(rules)
         assert engine.check_allowed("anything").allowed is False
 
@@ -89,14 +89,14 @@ class TestPolicyEngine:
             "  - name: specific\n"
             '    operations: ["vm_power_off"]\n'
             "    reason: Blocked\n"
-        )
+        , encoding="utf-8")
         engine = PolicyEngine(rules)
         assert engine.check_allowed("vm_power_off").allowed is False
         assert engine.check_allowed("vm_power_on").allowed is True
 
     def test_hot_reload(self, tmp_path):
         rules = tmp_path / "rules.yaml"
-        rules.write_text("")
+        rules.write_text("", encoding="utf-8")
         engine = PolicyEngine(rules)
         assert engine.check_allowed("delete_vm").allowed is True
 
@@ -106,7 +106,7 @@ class TestPolicyEngine:
             "  - name: new-rule\n"
             '    operations: ["delete_*"]\n'
             "    reason: Now blocked\n"
-        )
+        , encoding="utf-8")
         # Force mtime change detection
         import os
         os.utime(rules, (rules.stat().st_mtime + 1, rules.stat().st_mtime + 1))
@@ -120,7 +120,7 @@ class TestPolicyEngine:
             "  - name: block-all\n"
             '    operations: ["*"]\n'
             "    reason: Blocked\n"
-        )
+        , encoding="utf-8")
         engine = PolicyEngine(rules)
 
         monkeypatch.setenv("VMWARE_POLICY_DISABLED", "1")
@@ -140,7 +140,7 @@ class TestPolicyEngine:
         rules.write_text(
             "change_limits:\n"
             "  max_cpu_change_pct: 20\n"
-        )
+        , encoding="utf-8")
         engine = PolicyEngine(rules)
 
         with caplog.at_level(logging.WARNING, logger="vmware-policy.policy"):

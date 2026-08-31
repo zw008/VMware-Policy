@@ -21,7 +21,7 @@ from vmware_policy.policy import PolicyEngine
 def rules(tmp_path):
     def make(text: str) -> PolicyEngine:
         p = tmp_path / "rules.yaml"
-        p.write_text(text)
+        p.write_text(text, encoding="utf-8")
         return PolicyEngine(rules_path=p)
 
     return make
@@ -90,7 +90,7 @@ def test_policy_command_registers_before_main_guard():
     """The command was appended AFTER `if __name__ == "__main__": app()`, so
     `python -m vmware_policy.cli policy` ran the app before the command
     existed. Pin the module layout: no code after the __main__ guard."""
-    src = pathlib.Path("vmware_policy/cli.py").read_text()
+    src = pathlib.Path("vmware_policy/cli.py").read_text(encoding="utf-8")
     guard = src.index('if __name__ == "__main__"')
     assert "def policy(" in src[:guard], "policy command must be defined before the __main__ guard"
     tail = src[guard:].splitlines()[2:]
@@ -104,7 +104,7 @@ def test_policy_command_works_via_module_execution():
     proc = subprocess.run(
         [sys.executable, "-m", "vmware_policy.cli", "policy"],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
         timeout=60,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr

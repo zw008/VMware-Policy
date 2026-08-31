@@ -19,7 +19,7 @@ def engine(tmp_path):
     def make(text: str | None) -> PolicyEngine:
         p = tmp_path / "rules.yaml"
         if text is not None:
-            p.write_text(text)
+            p.write_text(text, encoding="utf-8")
         return PolicyEngine(rules_path=p)
 
     return make

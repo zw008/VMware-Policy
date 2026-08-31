@@ -104,7 +104,7 @@ class TestBudgetThroughDecorator:
         rules = tmp_path / "rules.yaml"
         rules.write_text(
             "deny:\n  - name: block_poll\n    operations: [poll]\n    reason: nope\n"
-        )
+        , encoding="utf-8")
         policy_mod._engine = policy_mod.PolicyEngine(rules)
 
         from vmware_policy.decorators import PolicyDenied
