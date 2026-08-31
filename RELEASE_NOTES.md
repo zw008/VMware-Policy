@@ -1,3 +1,38 @@
+## v1.12.1 — six leak shapes that were still standing, and two sentences that had been reversed
+
+Round 3 of the VCF 9 field testing rebuilt the redaction corpus from this lab's
+real password shapes (`@ * $ ^ ! #`) rather than the one the v1.11.0 work scored
+itself against. Six shapes still passed through, and one both destroyed the
+message and printed the secret:
+
+    auth=('admin','PASS')   ->   auth=***'admin', 'PASS')
+
+The value class excluded `)` but not `(`, so it matched the opening paren alone.
+`auth=(...)` is how httpx and requests are called, so it is what a traceback
+prints. The whole group is redacted now — the only reading that is safe whichever
+element holds the secret.
+
+The DSN rule excluded `@` from both halves of the userinfo. A vSphere SSO
+username always contains one, so the rule never fired on this family's own URLs;
+and an `@` inside a password truncated the match and printed the tail
+(`https://admin:***@c1QJwp@nsx/` — a real password fragment). Both halves may
+contain `@` now, anchored on the last one before the host, which is what a URL
+parser does.
+
+Three more had no credential keyword to key on at all: `curl -u user:pass`,
+`--user`, `sshpass -p`, and netrc's whitespace-separated `login admin password
+secret`.
+
+**Over-redaction, which is not cosmetic here.** `password: not set` became
+`password: *** set` — the sentence now says a password is set. `secret: not
+configured` the same. Measured over this family's own status vocabulary, 12 of 17
+phrases were rewritten and two reversed meaning. Status words and auxiliary verbs
+are no longer treated as values; `password policy requires 15 characters` and
+`Basic health check passed` were already protected and still are.
+
+All of these were unreachable from current code paths and are hardening rather
+than a live leak. A traceback is where an unreachable shape becomes reachable.
+
 ## v1.12.0 — one skill's environment resolver stopped answering for every other skill
 
 **The headline is a measured control failure, not a hardening.** With a

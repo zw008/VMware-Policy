@@ -688,7 +688,24 @@ _KEY_PREFIX = r"[\w.\-]*(?:" + _SECRET_WORDS + r")"
 #: Value characters. ``@`` is *included* — ``password=P@ssw0rd`` used to redact a
 #: single character and print the rest. DSN userinfo, which is why ``@`` was
 #: excluded, has its own rule below and runs first.
-_VALUE = r"[^\s'\",;&\]\}\)<>]+"
+#:
+#: ``(`` is excluded as well as ``)``. With only the closing paren excluded,
+#: ``auth=('admin', 'PASS')`` matched the opening paren alone and produced
+#: ``auth=***'admin', 'PASS')`` — it destroyed the message *and* printed the
+#: password. That is the most common way httpx and requests spell credentials,
+#: so it reaches a traceback easily.
+_VALUE = r"[^\s'\",;&\[\]\{\}\(\)<>]+"
+
+#: Words that are a *report about* a credential, not a credential. Redacting
+#: them inverts the sentence: ``password: not set`` became ``password: *** set``,
+#: which reads as "a password is set". Measured over this family's own status
+#: vocabulary, 12 of 17 phrases were rewritten and two of them reversed meaning.
+#: Listed values are never secrets, so skipping them costs nothing.
+_STATUS_WORDS = (
+    r"(?!(?:not|no|none|null|unset|empty|missing|absent|set|configured|provided|"
+    r"required|ok|yes|true|false|n/?a|was|is|were|are|will|has|have|been|"
+    r"\*\*\*|<[^>]*>)\b)"
+)
 
 #: HTTP auth schemes. The Authorization rule below deliberately leaves the scheme
 #: visible ("Basic" vs "Bearer" is the difference between two different
@@ -698,6 +715,17 @@ _AUTH_SCHEMES = r"basic|bearer|digest|negotiate|ntlm|token|apikey"
 _NOT_A_SCHEME = r"(?!(?:" + _AUTH_SCHEMES + r")\s)"
 
 _REDACTIONS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # A credential pair spelled as a tuple: auth=('admin', 'hunter2'). This is
+    # how httpx and requests are called, so it is what a traceback prints. The
+    # generic key=value rule cannot help: its value class has to exclude the
+    # parentheses, or it matches the opening paren alone and yields
+    # ``auth=***'admin', 'PASS')`` -- the message destroyed and the password
+    # still there. Redacting the whole group is the only reading that is safe
+    # whichever element holds the secret.
+    (
+        re.compile(r"(?i)\b(" + r"[\w.\-]*(?:auth|credential|credentials)" + r")(\s*=\s*)\([^()]*\)"),
+        r"\1\2(***)",
+    ),
     # PEM private key blocks — no key=value shape at all, previously untouched.
     (
         re.compile(
@@ -709,8 +737,16 @@ _REDACTIONS: tuple[tuple[re.Pattern[str], str], ...] = (
         r"\1***\2",
     ),
     # URL / DSN userinfo: scheme://user:secret@host
+    #
+    # Both halves may contain ``@`` and the old classes excluded it from both.
+    # A vSphere SSO username *always* contains one (``administrator@vsphere.local``),
+    # so the rule did not fire at all on this family's own URLs; and a password
+    # containing one made the match stop early and print the tail
+    # (``https://admin:***@c1QJwp@nsx/`` — a real password fragment).
+    # The username is non-greedy and the password greedy up to the last ``@``
+    # before the host, which is what a URL parser does.
     (
-        re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://[^\s/:@]+):([^\s/@]+)@"),
+        re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://[^\s/:]*?):([^\s/]*)@(?=[^\s/@]*(?:[/\s?#]|$))"),
         r"\1:***@",
     ),
     # Cookie / Set-Cookie: the whole header value is credential material.
@@ -752,12 +788,37 @@ _REDACTIONS: tuple[tuple[re.Pattern[str], str], ...] = (
     # CLI flag: --password secret / -token secret (whitespace separator, but only
     # after a dash, so "password policy requires 15 characters" survives).
     (
-        re.compile(r"(?i)(-{1,2}[\w\-]*(?:" + _SECRET_WORDS + r"))(\s+)[^\s'\",;]+"),
+        re.compile(
+            r"(?i)(-{1,2}[\w\-]*(?:" + _SECRET_WORDS + r"))(\s+)"
+            + _STATUS_WORDS + r"[^\s'\",;]+"
+        ),
+        r"\1\2***",
+    ),
+    # Tools that carry the credential in a flag with no credential-sounding name.
+    # ``curl -u user:pass``, ``--user``, ``sshpass -p``. Nothing in the text says
+    # "password", so every keyword rule above walks straight past them.
+    (
+        re.compile(r"(?i)(\B-u|--user)(\s+)([^\s'\",;:]+):[^\s'\",;]+"),
+        r"\1\2\3:***",
+    ),
+    (
+        re.compile(r"(?i)\b(sshpass\s+-p)(\s*)[^\s'\",;]+"),
+        r"\1\2***",
+    ),
+    # netrc: ``machine host login user password secret``. Whitespace-separated
+    # with no dash, which the flag rule above deliberately requires so that
+    # "password policy requires 15 characters" survives. Anchoring on the
+    # preceding ``login <user>`` keeps that sentence readable.
+    (
+        re.compile(r"(?i)\b(login\s+\S+\s+password)(\s+)[^\s'\",;]+"),
         r"\1\2***",
     ),
     # Unquoted key=value / key: value.
     (
-        re.compile(r"(?i)(" + _KEY_PREFIX + r")(\s*[:=]\s*)" + _NOT_A_SCHEME + _VALUE),
+        re.compile(
+            r"(?i)(" + _KEY_PREFIX + r")(\s*[:=]\s*)"
+            + _NOT_A_SCHEME + _STATUS_WORDS + _VALUE
+        ),
         r"\1\2***",
     ),
     # A bare JWT with no key in front of it — a Supervisor token pasted into an
