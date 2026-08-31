@@ -109,3 +109,30 @@ def _remedy(path: Path) -> str:
     # inherited ACEs first, otherwise the grant is added alongside them and the
     # file stays as readable as the directory it sits in.
     return f'icacls "{path}" /inheritance:r /grant:r "%USERNAME%:F"'
+
+def assert_owner_only(path: "os.PathLike[str] | str") -> None:
+    """Test helper: fail if ``path`` is readable by anyone but its owner.
+
+    Written because 18 test sites across the family each asserted
+    ``st_mode & 0o777 == 0o600`` directly, and every one of them failed on the
+    Windows test box — not because the product was wrong, but because Windows
+    has no POSIX mode bits to compare. Nine of the round-4 test failures were
+    this and nothing else, which is worse than noise: real failures had to be
+    picked out of a pile of platform artefacts.
+
+    The irony worth recording: ``check_secret_file`` was written for exactly
+    this, the source was moved onto it, and the tests were not.
+
+    Strength is kept where it can be had. On POSIX the exact mode is still
+    asserted, so a file that goes from 0600 to 0644 still fails. Where the
+    platform expresses no mode bits, the weaker "not too open" is the only true
+    statement available, and asserting more would only be asserting fiction.
+    """
+    check = check_secret_file(path)
+    assert not check.is_failure, check.message
+    if POSIX_PERMISSIONS:
+        import os as _os
+        import stat as _stat
+
+        mode = _stat.S_IMODE(_os.stat(path).st_mode)
+        assert mode == 0o600, f"{path} is {oct(mode)}, expected 0o600"
